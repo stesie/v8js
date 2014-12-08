@@ -1082,8 +1082,7 @@ static void php_v8js_terminate_execution(php_v8js_ctx *c TSRMLS_DC)
 	// This timer will be removed from stack by the parent thread.
 }
 
-static void php_v8js_timer_interrupt_handler(v8::Isolate *isolate, void *data)
-{
+static void php_v8js_timer_interrupt_handler(v8::Isolate *isolate, void *data) { /* {{{ */
 #ifdef ZTS
 	TSRMLS_D = (void ***) data;
 #endif
@@ -1096,8 +1095,6 @@ static void php_v8js_timer_interrupt_handler(v8::Isolate *isolate, void *data)
 	v8::HeapStatistics hs;
 	isolate->GetHeapStatistics(&hs);
 
-	std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now();
-
 	V8JSG(timer_mutex).lock();
 
 	for (std::deque< php_v8js_timer_ctx* >::iterator it = V8JSG(timer_stack).begin();
@@ -1105,14 +1102,8 @@ static void php_v8js_timer_interrupt_handler(v8::Isolate *isolate, void *data)
 		php_v8js_timer_ctx *timer_ctx = *it;
 		php_v8js_ctx *c = timer_ctx->v8js_ctx;
 
-		if(c->isolate != isolate && timer_ctx->killed) {
+		if(c->isolate != isolate || timer_ctx->killed) {
 			continue;
-		}
-
-		if (timer_ctx->time_limit > 0 && now > timer_ctx->time_point) {
-			timer_ctx->killed = true;
-			php_v8js_terminate_execution(c TSRMLS_CC);
-			c->time_limit_hit = true;
 		}
 
 		if (timer_ctx->memory_limit > 0 && hs.used_heap_size() > timer_ctx->memory_limit) {
@@ -1124,6 +1115,7 @@ static void php_v8js_timer_interrupt_handler(v8::Isolate *isolate, void *data)
 
 	V8JSG(timer_mutex).unlock();
 }
+/* }}} */
 
 static void php_v8js_timer_thread(TSRMLS_D)
 {
@@ -1132,9 +1124,24 @@ static void php_v8js_timer_thread(TSRMLS_D)
 		V8JSG(timer_mutex).lock();
 		if (V8JSG(timer_stack).size()) {
 			php_v8js_timer_ctx *timer_ctx = V8JSG(timer_stack).front();
+			php_v8js_ctx *c = timer_ctx->v8js_ctx;
+			std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now();
 
-			if(!timer_ctx->killed) {
-				php_v8js_ctx *c = timer_ctx->v8js_ctx;
+			if(timer_ctx->killed) {
+				/* execution already terminated, nothing to check anymore,
+				 * but wait for caller to pop this timer context. */
+			}
+			else if(timer_ctx->time_limit > 0 && now > timer_ctx->time_point) {
+				timer_ctx->killed = true;
+				php_v8js_terminate_execution(c TSRMLS_CC);
+				c->time_limit_hit = true;
+			}
+			else if (timer_ctx->memory_limit > 0) {
+				/* If a memory_limit is set, we need to interrupt execution
+				 * and check heap size within the callback.  We must *not*
+				 * directly call GetHeapStatistics here, since we don't have
+				 * a v8::Locker on the isolate, but are expected to hold one,
+				 * and cannot aquire it as v8 is executing the script ... */
 				void *data = NULL;
 #ifdef ZTS
 				data = (void *) TSRMLS_C;

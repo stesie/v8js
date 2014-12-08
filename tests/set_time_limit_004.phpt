@@ -22,10 +22,10 @@ for (var j = 0; j < 30; ++j) {
 EOT;
 
 $v8 = new V8Js();
-$v8->setTimeLimit(50);
+$v8->setTimeLimit(100);
 
 $v8->prolongTimeLimit = function() use ($v8) {
-    $v8->setTimeLimit(50);
+    $v8->setTimeLimit(100);
 };
 
 $v8->executeString($JS);
