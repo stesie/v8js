@@ -36,6 +36,7 @@ extern "C" {
 }
 
 #include <functional>
+#include <iostream>
 
 /* Forward declarations */
 static void php_v8js_throw_script_exception(v8::TryCatch * TSRMLS_DC);
@@ -1081,47 +1082,74 @@ static void php_v8js_terminate_execution(php_v8js_ctx *c TSRMLS_DC)
 	// This timer will be removed from stack by the parent thread.
 }
 
+static void php_v8js_timer_interrupt_handler(v8::Isolate *isolate, void *data)
+{
+#ifdef ZTS
+	TSRMLS_D = (void ***) data;
+#endif
+
+	if (!V8JSG(timer_stack).size()) {
+		return;
+	}
+
+	v8::Locker locker(isolate);
+	v8::HeapStatistics hs;
+	isolate->GetHeapStatistics(&hs);
+
+	std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now();
+
+	V8JSG(timer_mutex).lock();
+
+	for (std::deque< php_v8js_timer_ctx* >::iterator it = V8JSG(timer_stack).begin();
+		 it != V8JSG(timer_stack).end(); it ++) {
+		php_v8js_timer_ctx *timer_ctx = *it;
+		php_v8js_ctx *c = timer_ctx->v8js_ctx;
+
+		if(c->isolate != isolate && timer_ctx->killed) {
+			continue;
+		}
+
+		if (timer_ctx->time_limit > 0 && now > timer_ctx->time_point) {
+			timer_ctx->killed = true;
+			php_v8js_terminate_execution(c TSRMLS_CC);
+			c->time_limit_hit = true;
+		}
+
+		if (timer_ctx->memory_limit > 0 && hs.used_heap_size() > timer_ctx->memory_limit) {
+			timer_ctx->killed = true;
+			php_v8js_terminate_execution(c TSRMLS_CC);
+			c->memory_limit_hit = true;
+		}
+	}
+
+	V8JSG(timer_mutex).unlock();
+}
+
 static void php_v8js_timer_thread(TSRMLS_D)
 {
 	while (!V8JSG(timer_stop)) {
-		std::chrono::time_point<std::chrono::high_resolution_clock> now = std::chrono::high_resolution_clock::now();
-		v8::HeapStatistics hs;
 
+		V8JSG(timer_mutex).lock();
 		if (V8JSG(timer_stack).size()) {
-			// Get the current timer context
 			php_v8js_timer_ctx *timer_ctx = V8JSG(timer_stack).front();
-			php_v8js_ctx *c = timer_ctx->v8js_ctx;
 
-			// Get memory usage statistics for the isolate
-			c->isolate->GetHeapStatistics(&hs);
-
-			if (timer_ctx->time_limit > 0 && now > timer_ctx->time_point &&
-				!timer_ctx->killed) {
-				timer_ctx->killed = true;
-				php_v8js_terminate_execution(c TSRMLS_CC);
-
-				V8JSG(timer_mutex).lock();
-				c->time_limit_hit = true;
-				V8JSG(timer_mutex).unlock();
-			}
-
-			if (timer_ctx->memory_limit > 0 && hs.used_heap_size() > timer_ctx->memory_limit &&
-				!timer_ctx->killed) {
-				timer_ctx->killed = true;
-				php_v8js_terminate_execution(c TSRMLS_CC);
-
-				V8JSG(timer_mutex).lock();
-				c->memory_limit_hit = true;
-				V8JSG(timer_mutex).unlock();
+			if(!timer_ctx->killed) {
+				php_v8js_ctx *c = timer_ctx->v8js_ctx;
+				void *data = NULL;
+#ifdef ZTS
+				data = (void *) TSRMLS_C;
+#endif
+				c->isolate->RequestInterrupt(php_v8js_timer_interrupt_handler, data);
 			}
 		}
+		V8JSG(timer_mutex).unlock();
 
 		// Sleep for 10ms
 #ifdef _WIN32
 		concurrency::wait(10);
 #else
-		std::chrono::milliseconds duration(10);
-		std::this_thread::sleep_for(duration);
+		std::chrono::milliseconds duration(1);
+		//std::this_thread::sleep_for(duration);
 #endif
 	}
 }
