@@ -133,7 +133,6 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <v8-debug.h>]],
 	v8js_timer.cc			\
 	v8js_v8.cc				\
     v8js_v8object_class.cc	\
-    v8js_variables.cc		\
   ], $ext_shared, , "-std="$ac_cv_v8_cstd)
 
   PHP_ADD_MAKEFILE_FRAGMENT

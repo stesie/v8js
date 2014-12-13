@@ -98,20 +98,6 @@ v8::Handle<v8::Value> zval_to_v8js(zval *, v8::Isolate * TSRMLS_DC);
 /* Convert V8 value into zval */
 int v8js_to_zval(v8::Handle<v8::Value>, zval *, int, v8::Isolate * TSRMLS_DC);
 
-struct v8js_accessor_ctx
-{
-    char *variable_name_string;
-    uint variable_name_string_len;
-    v8::Isolate *isolate;
-};
-
-void v8js_accessor_ctx_dtor(v8js_accessor_ctx * TSRMLS_DC);
-
-/* Register accessors into passed object */
-void v8js_register_accessors(std::vector<v8js_accessor_ctx*> *accessor_list, v8::Local<v8::FunctionTemplate>, zval *, v8::Isolate * TSRMLS_DC);
-
-/* Resource declaration */
-
 /* Module globals */
 ZEND_BEGIN_MODULE_GLOBALS(v8js)
   int v8_initialized;

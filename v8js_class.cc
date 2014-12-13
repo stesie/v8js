@@ -74,6 +74,7 @@ static void v8js_free_storage(void *object TSRMLS_DC) /* {{{ */
 	v8js_ctx *c = (v8js_ctx *) object;
 
 	zend_object_std_dtor(&c->std TSRMLS_CC);
+	zval_ptr_dtor(&c->user_properties);
 
 	if (c->pending_exception) {
 		zval_ptr_dtor(&c->pending_exception);
@@ -105,13 +106,6 @@ static void v8js_free_storage(void *object TSRMLS_DC) /* {{{ */
 		it->second.Reset();
 	}
 	c->template_cache.~map();
-
-	/* Clear contexts */
-	for (std::vector<v8js_accessor_ctx*>::iterator it = c->accessor_list.begin();
-		 it != c->accessor_list.end(); ++it) {
-		v8js_accessor_ctx_dtor(*it TSRMLS_CC);
-	}
-	c->accessor_list.~vector();
 
 	/* Clear global object, dispose context */
 	if (!c->context.IsEmpty()) {
@@ -178,6 +172,9 @@ static zend_object_value v8js_new(zend_class_entry *ce TSRMLS_DC) /* {{{ */
 	zend_object_std_init(&c->std, ce TSRMLS_CC);
 	TSRMLS_SET_CTX(c->zts_ctx);
 
+	MAKE_STD_ZVAL(c->user_properties);
+	object_init_ex(c->user_properties, zend_standard_class_def);
+
 #if PHP_VERSION_ID >= 50400
 	object_properties_init(&c->std, ce);
 #else
@@ -195,7 +192,6 @@ static zend_object_value v8js_new(zend_class_entry *ce TSRMLS_DC) /* {{{ */
 	new(&c->modules_loaded) std::map<char *, v8js_persistent_obj_t>;
 
 	new(&c->template_cache) std::map<const char *,v8js_tmpl_t>();
-	new(&c->accessor_list) std::vector<v8js_accessor_ctx *>();
 
 	new(&c->weak_closures) std::map<v8js_tmpl_t *, v8js_persistent_obj_t>();
 	new(&c->weak_objects) std::map<zval *, v8js_persistent_obj_t>();
@@ -335,10 +331,16 @@ static PHP_METHOD(V8Js, __construct)
 
 	c->module_loader = NULL;
 
+	/* @todo create user_properties object if needed */
+
+	if (Z_TYPE_P(vars_arr) == IS_ARRAY) {
+		zend_hash_merge(Z_OBJPROP_P(c->user_properties), HASH_OF(vars_arr),
+						(copy_ctor_func_t) zval_add_ref, NULL, sizeof(zval *), 0);
+	}
+
 	/* Include extensions used by this context */
 	/* Note: Extensions registered with auto_enable do not need to be added separately like this. */
-	if (exts_arr)
-	{
+	if (exts_arr) {
 		exts_count = zend_hash_num_elements(Z_ARRVAL_P(exts_arr));
 		if (v8js_create_ext_strarr(&exts, exts_count, Z_ARRVAL_P(exts_arr)) == FAILURE) {
 			php_error_docref(NULL TSRMLS_CC, E_WARNING, "Invalid extensions array passed");
@@ -362,8 +364,6 @@ static PHP_METHOD(V8Js, __construct)
 	v8::V8::SetFatalErrorHandler(v8js_fatal_error_handler);
 
 	/* Create global template for global object */
-	// Now we are using multiple isolates this needs to be created for every context
-
 	v8::Local<v8::FunctionTemplate> tpl = v8::FunctionTemplate::New(c->isolate, 0);
 
 	tpl->SetClassName(V8JS_SYM("V8Js"));
@@ -391,61 +391,13 @@ static PHP_METHOD(V8Js, __construct)
 	/* Enter context */
 	v8::Context::Scope context_scope(context);
 
-	/* Create the PHP container object's function template */
-	v8::Local<v8::FunctionTemplate> php_obj_t = v8::FunctionTemplate::New(isolate, 0);
-
-	/* Set class name for PHP object */
-#if PHP_VERSION_ID >= 50400
-	free = !zend_get_object_classname(getThis(), const_cast<const char**>(&class_name), &class_name_len TSRMLS_CC);
-#else
-	free = !zend_get_object_classname(getThis(), &class_name, &class_name_len TSRMLS_CC);
-#endif
-	php_obj_t->SetClassName(V8JS_SYML(class_name, class_name_len));
-
-	if (free) {
-		efree(class_name);
-	}
-
-	/* Register Get accessor for passed variables */
-	if (vars_arr && zend_hash_num_elements(Z_ARRVAL_P(vars_arr)) > 0) {
-		v8js_register_accessors(&c->accessor_list, php_obj_t, vars_arr, isolate TSRMLS_CC);
-	}
-
 	/* Set name for the PHP JS object */
 	v8::Local<v8::String> object_name_js = (object_name_len) ? V8JS_SYML(object_name, object_name_len) : V8JS_SYM("PHP");
 	c->object_name.Reset(isolate, object_name_js);
 
-	/* Add the PHP object into global object */
-	v8::Local<v8::Object> php_obj = php_obj_t->InstanceTemplate()->NewInstance();
+	/* Create the PHP container object */
+	v8::Local<v8::Value> php_obj = zval_to_v8js(c->user_properties, isolate TSRMLS_CC);
 	V8JS_GLOBAL(isolate)->ForceSet(object_name_js, php_obj, v8::ReadOnly);
-
-	/* Export public property values */
-	HashTable *properties = zend_std_get_properties(getThis() TSRMLS_CC);
-	HashPosition pos;
-	zval **value;
-	ulong index;
-	char *member;
-	uint member_len;
-
-	for(zend_hash_internal_pointer_reset_ex(properties, &pos);
-		zend_hash_get_current_data_ex(properties, (void **) &value, &pos) == SUCCESS;
-		zend_hash_move_forward_ex(properties, &pos)) {
-		if(zend_hash_get_current_key_ex(properties, &member, &member_len, &index, 0, &pos) != HASH_KEY_IS_STRING) {
-			continue;
-		}
-
-		zval zmember;
-		INIT_ZVAL(zmember);
-		ZVAL_STRING(&zmember, member, 0);
-
-		zend_property_info *property_info = zend_get_property_info(c->std.ce, &zmember, 1 TSRMLS_CC);
-		if(property_info && property_info->flags & ZEND_ACC_PUBLIC) {
-			/* Write value to PHP JS object */
-			php_obj->ForceSet(V8JS_SYML(member, member_len - 1), zval_to_v8js(*value, isolate TSRMLS_CC), v8::ReadOnly);
-		}
-	}
-
-
 }
 /* }}} */
 
@@ -1073,44 +1025,6 @@ static const zend_function_entry v8js_methods[] = { /* {{{ */
 
 
 
-/* V8Js object handlers */
-
-static void v8js_write_property(zval *object, zval *member, zval *value ZEND_HASH_KEY_DC TSRMLS_DC) /* {{{ */
-{
-	V8JS_BEGIN_CTX(c, object)
-
-	/* Check whether member is public, if so, export to V8. */
-	zend_property_info *property_info = zend_get_property_info(c->std.ce, member, 1 TSRMLS_CC);
-	if(property_info->flags & ZEND_ACC_PUBLIC) {
-		/* Global PHP JS object */
-		v8::Local<v8::String> object_name_js = v8::Local<v8::String>::New(isolate, c->object_name);
-		v8::Local<v8::Object> jsobj = V8JS_GLOBAL(isolate)->Get(object_name_js)->ToObject();
-
-		/* Write value to PHP JS object */
-		jsobj->ForceSet(V8JS_SYML(Z_STRVAL_P(member), Z_STRLEN_P(member)), zval_to_v8js(value, isolate TSRMLS_CC), v8::ReadOnly);
-	}
-
-	/* Write value to PHP object */
-	std_object_handlers.write_property(object, member, value ZEND_HASH_KEY_CC TSRMLS_CC);
-}
-/* }}} */
-
-static void v8js_unset_property(zval *object, zval *member ZEND_HASH_KEY_DC TSRMLS_DC) /* {{{ */
-{
-	V8JS_BEGIN_CTX(c, object)
-
-	/* Global PHP JS object */
-	v8::Local<v8::String> object_name_js = v8::Local<v8::String>::New(isolate, c->object_name);
-	v8::Local<v8::Object> jsobj = V8JS_GLOBAL(isolate)->Get(object_name_js)->ToObject();
-	
-	/* Delete value from PHP JS object */
-	jsobj->ForceDelete(V8JS_SYML(Z_STRVAL_P(member), Z_STRLEN_P(member)));
-
-	/* Unset from PHP object */
-	std_object_handlers.unset_property(object, member ZEND_HASH_KEY_CC TSRMLS_CC);
-}
-/* }}} */
-
 PHP_MINIT_FUNCTION(v8js_class) /* {{{ */
 {
 	zend_class_entry ce;
@@ -1123,8 +1037,6 @@ PHP_MINIT_FUNCTION(v8js_class) /* {{{ */
 	/* V8Js handlers */
 	memcpy(&v8js_object_handlers, zend_get_std_object_handlers(), sizeof(zend_object_handlers));
 	v8js_object_handlers.clone_obj = NULL;
-	v8js_object_handlers.write_property = v8js_write_property;
-	v8js_object_handlers.unset_property = v8js_unset_property;
 
 	/* V8Js Class Constants */
 	zend_declare_class_constant_string(php_ce_v8js, ZEND_STRL("V8_VERSION"),		PHP_V8_VERSION			TSRMLS_CC);

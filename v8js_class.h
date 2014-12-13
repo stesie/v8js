@@ -26,6 +26,8 @@ struct v8js_accessor_ctx;
 /* {{{ Context container */
 struct v8js_ctx {
   zend_object std;
+  zval *user_properties;
+
   v8::Persistent<v8::String> object_name;
   v8::Persistent<v8::Context> context;
   zend_bool report_uncaught;
@@ -51,7 +53,6 @@ struct v8js_ctx {
 
   std::list<v8js_v8object *> v8js_v8objects;
 
-  std::vector<v8js_accessor_ctx *> accessor_list;
   char *tz;
 #ifdef ZTS
   void ***zts_ctx;
