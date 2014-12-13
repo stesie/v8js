@@ -30,13 +30,14 @@ extern "C" {
 #include "v8js_exceptions.h"
 #include "v8js_v8object_class.h"
 #include "v8js_timer.h"
+#include "v8js_user_properties_proxy_class.h"
 
 #include <functional>
 
 #define PHP_V8JS_SCRIPT_RES_NAME "V8Js script"
 
 /* {{{ Class Entries */
-static zend_class_entry *php_ce_v8js;
+zend_class_entry *php_ce_v8js;
 /* }}} */
 
 /* {{{ Object Handlers */
@@ -173,7 +174,6 @@ static zend_object_value v8js_new(zend_class_entry *ce TSRMLS_DC) /* {{{ */
 	TSRMLS_SET_CTX(c->zts_ctx);
 
 	MAKE_STD_ZVAL(c->user_properties);
-	object_init_ex(c->user_properties, zend_standard_class_def);
 
 #if PHP_VERSION_ID >= 50400
 	object_properties_init(&c->std, ce);
@@ -331,9 +331,17 @@ static PHP_METHOD(V8Js, __construct)
 
 	c->module_loader = NULL;
 
-	/* @todo create user_properties object if needed */
+	/* Construct V8JsUserPropertiesProxy */
+	object_init_ex(c->user_properties, php_ce_v8js_user_properties_proxy);
+	zval fname, dummy;
+	INIT_ZVAL(fname);
+	ZVAL_STRING(&fname, "__construct", 0);
+	INIT_ZVAL(dummy);
+	zval *args[] = { getThis() };
+	call_user_function(NULL, &c->user_properties, &fname, &dummy, 1, args TSRMLS_CC);
+	zval_dtor(&dummy);
 
-	if (Z_TYPE_P(vars_arr) == IS_ARRAY) {
+	if (vars_arr && Z_TYPE_P(vars_arr) == IS_ARRAY) {
 		zend_hash_merge(Z_OBJPROP_P(c->user_properties), HASH_OF(vars_arr),
 						(copy_ctor_func_t) zval_add_ref, NULL, sizeof(zval *), 0);
 	}

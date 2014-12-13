@@ -14,6 +14,7 @@
 #ifndef V8JS_CLASS_H
 #define V8JS_CLASS_H
 
+extern zend_class_entry *php_ce_v8js;
 
 /* Abbreviate long type names */
 typedef v8::Persistent<v8::FunctionTemplate, v8::CopyablePersistentTraits<v8::FunctionTemplate> > v8js_tmpl_t;

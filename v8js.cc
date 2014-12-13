@@ -31,6 +31,7 @@ extern "C" {
 #include "v8js_class.h"
 #include "v8js_exceptions.h"
 #include "v8js_v8object_class.h"
+#include "v8js_user_properties_proxy_class.h"
 
 ZEND_DECLARE_MODULE_GLOBALS(v8js)
 
@@ -108,6 +109,7 @@ PHP_MINIT_FUNCTION(v8js)
 	PHP_MINIT(v8js_class)(INIT_FUNC_ARGS_PASSTHRU);
 	PHP_MINIT(v8js_exceptions)(INIT_FUNC_ARGS_PASSTHRU);
 	PHP_MINIT(v8js_v8object_class)(INIT_FUNC_ARGS_PASSTHRU);
+	PHP_MINIT(v8js_user_properties_proxy_class)(INIT_FUNC_ARGS_PASSTHRU);
 
 	REGISTER_INI_ENTRIES();
 

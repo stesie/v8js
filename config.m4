@@ -130,8 +130,9 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <v8-debug.h>]],
     v8js_exceptions.cc		\
     v8js_methods.cc			\
     v8js_object_export.cc	\
-	v8js_timer.cc			\
-	v8js_v8.cc				\
+    v8js_timer.cc			\
+    v8js_user_properties_proxy_class.cc \
+    v8js_v8.cc				\
     v8js_v8object_class.cc	\
   ], $ext_shared, , "-std="$ac_cv_v8_cstd)
 
