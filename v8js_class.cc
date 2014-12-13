@@ -758,6 +758,42 @@ static PHP_METHOD(V8Js, setMemoryLimit)
 }
 /* }}} */
 
+/* {{{ proto void V8Js::setUserProperties(object userProperties)
+ */
+static PHP_METHOD(V8Js, setUserProperties)
+{
+	zval *new_obj = NULL;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "o", &new_obj) == FAILURE) {
+		return;
+	}
+
+	V8JS_BEGIN_CTX(c, getThis());
+
+	REPLACE_ZVAL_VALUE(&c->user_properties, new_obj, 1);
+	v8::Local<v8::String> object_name_js = v8::Local<v8::String>::New(isolate, c->object_name);
+
+	/* Create the new PHP container object */
+	v8::Local<v8::Value> php_obj = zval_to_v8js(c->user_properties, isolate TSRMLS_CC);
+	V8JS_GLOBAL(isolate)->ForceSet(object_name_js, php_obj, v8::ReadOnly);
+}
+/* }}} */
+
+/* {{{ proto object V8Js::getUserProperties()
+ */
+static PHP_METHOD(V8Js, getUserProperties)
+{
+	v8js_ctx *c;
+
+	if (zend_parse_parameters_none() == FAILURE) {
+		return;
+	}
+
+	c = (v8js_ctx *) zend_object_store_get_object(getThis() TSRMLS_CC);
+	RETURN_ZVAL(c->user_properties, 1, 0);
+}
+/* }}} */
+
 static void v8js_persistent_zval_ctor(zval **p) /* {{{ */
 {
 	zval *orig_ptr = *p;
@@ -999,6 +1035,13 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_v8js_setmemorylimit, 0, 0, 1)
 	ZEND_ARG_INFO(0, memory_limit)
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_v8js_setuserproperties, 0, 0, 1)
+	ZEND_ARG_INFO(0, user_properties)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_v8js_getuserproperties, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
 
 static const zend_function_entry v8js_methods[] = { /* {{{ */
 	PHP_ME(V8Js,	__construct,			arginfo_v8js_construct,				ZEND_ACC_PUBLIC|ZEND_ACC_CTOR)
@@ -1015,6 +1058,8 @@ static const zend_function_entry v8js_methods[] = { /* {{{ */
 	PHP_ME(V8Js,	getExtensions,			arginfo_v8js_getextensions,			ZEND_ACC_PUBLIC|ZEND_ACC_STATIC)
 	PHP_ME(V8Js,	setTimeLimit,			arginfo_v8js_settimelimit,			ZEND_ACC_PUBLIC)
 	PHP_ME(V8Js,	setMemoryLimit,			arginfo_v8js_setmemorylimit,		ZEND_ACC_PUBLIC)
+	PHP_ME(V8Js,	setUserProperties,		arginfo_v8js_setuserproperties,		ZEND_ACC_PUBLIC)
+	PHP_ME(V8Js,	getUserProperties,		arginfo_v8js_getuserproperties,		ZEND_ACC_PUBLIC)
 #ifdef ENABLE_DEBUGGER_SUPPORT
 	PHP_ME(V8Js,	__destruct,				arginfo_v8js_destruct,				ZEND_ACC_PUBLIC|ZEND_ACC_DTOR)
 	PHP_ME(V8Js,	startDebugAgent,		arginfo_v8js_startdebugagent,		ZEND_ACC_PUBLIC)
