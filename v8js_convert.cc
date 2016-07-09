@@ -55,7 +55,7 @@ static int v8js_is_assoc_array(HashTable *myht TSRMLS_DC) /* {{{ */
 /* }}} */
 
 
-static v8::Handle<v8::Value> v8js_hash_to_jsarr(zval *value, v8::Isolate *isolate TSRMLS_DC) /* {{{ */
+static v8::Local<v8::Value> v8js_hash_to_jsarr(zval *value, v8::Isolate *isolate TSRMLS_DC) /* {{{ */
 {
 	HashTable *myht = HASH_OF(value);
 	int i = myht ? zend_hash_num_elements(myht) : 0;
@@ -98,9 +98,9 @@ static v8::Handle<v8::Value> v8js_hash_to_jsarr(zval *value, v8::Isolate *isolat
 }
 /* }}} */
 
-v8::Handle<v8::Value> zval_to_v8js(zval *value, v8::Isolate *isolate TSRMLS_DC) /* {{{ */
+v8::Local<v8::Value> zval_to_v8js(zval *value, v8::Isolate *isolate TSRMLS_DC) /* {{{ */
 {
-	v8::Handle<v8::Value> jsValue;
+	v8::Local<v8::Value> jsValue;
 	long v;
 	zend_class_entry *ce;
 
@@ -169,7 +169,7 @@ v8::Handle<v8::Value> zval_to_v8js(zval *value, v8::Isolate *isolate TSRMLS_DC) 
 }
 /* }}} */
 
-int v8js_to_zval(v8::Handle<v8::Value> jsValue, zval *return_value, int flags, v8::Isolate *isolate TSRMLS_DC) /* {{{ */
+int v8js_to_zval(v8::Local<v8::Value> jsValue, zval *return_value, int flags, v8::Isolate *isolate TSRMLS_DC) /* {{{ */
 {
 	if (jsValue->IsString())
 	{

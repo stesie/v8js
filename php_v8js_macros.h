@@ -79,10 +79,10 @@ extern "C" {
 
 
 /* Convert zval into V8 value */
-v8::Handle<v8::Value> zval_to_v8js(zval *, v8::Isolate * TSRMLS_DC);
+v8::Local<v8::Value> zval_to_v8js(zval *, v8::Isolate * TSRMLS_DC);
 
 /* Convert V8 value into zval */
-int v8js_to_zval(v8::Handle<v8::Value>, zval *, int, v8::Isolate * TSRMLS_DC);
+int v8js_to_zval(v8::Local<v8::Value>, zval *, int, v8::Isolate * TSRMLS_DC);
 
 struct v8js_accessor_ctx
 {
@@ -156,7 +156,7 @@ struct _v8js_process_globals {
 extern struct _v8js_process_globals v8js_process_globals;
 
 /* Register builtin methods into passed object */
-void v8js_register_methods(v8::Handle<v8::ObjectTemplate>, v8js_ctx *c);
+void v8js_register_methods(v8::Local<v8::ObjectTemplate>, v8js_ctx *c);
 
 #endif	/* PHP_V8JS_MACROS_H */
 
