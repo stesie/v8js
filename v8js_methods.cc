@@ -201,6 +201,96 @@ V8JS_METHOD(var_dump) /* {{{ */
 }
 /* }}} */
 
+static void v8js_call_custom_normaliser(v8js_ctx *c, const char *module_id,
+										char **normalised_path /* out */, char **module_name /* out */)
+{
+	v8::Isolate *isolate = c->isolate;
+	int call_result;
+	zval params[2];
+	zval normaliser_result;
+
+	zend_try {
+		{
+			isolate->Exit();
+			v8::Unlocker unlocker(isolate);
+
+			ZVAL_STRING(&params[0], c->modules_base.back());
+			ZVAL_STRING(&params[1], module_id);
+
+			call_result = call_user_function_ex(EG(function_table), NULL, &c->module_normaliser,
+												&normaliser_result, 2, params, 0, NULL);
+		}
+
+		isolate->Enter();
+
+		if (call_result == FAILURE) {
+			throw V8JS_SYM("Module normaliser callback failed");
+		}
+	}
+	zend_catch {
+		v8js_terminate_execution(isolate);
+		V8JSG(fatal_error_abort) = 1;
+		call_result = FAILURE;
+	}
+	zend_end_try();
+
+	zval_dtor(&params[0]);
+	zval_dtor(&params[1]);
+
+	if(call_result == FAILURE) {
+		throw V8JS_SYM("Module normaliser callback failed");
+	}
+
+	// Check if an exception was thrown
+	if (EG(exception)) {
+		if (c->flags & V8JS_FLAG_PROPAGATE_PHP_EXCEPTIONS) {
+			zval tmp_zv;
+			ZVAL_OBJ(&tmp_zv, EG(exception));
+			v8::Local<v8::Value> exception = zval_to_v8js(&tmp_zv, isolate);
+			zend_clear_exception();
+			throw exception;
+		} else {
+			v8js_terminate_execution(isolate);
+			throw false;
+		}
+	}
+
+	if (Z_TYPE(normaliser_result) != IS_ARRAY) {
+		zval_dtor(&normaliser_result);
+		throw V8JS_SYM("Module normaliser didn't return an array");
+	}
+
+	HashTable *ht = HASH_OF(&normaliser_result);
+	int num_elements = zend_hash_num_elements(ht);
+
+	if(num_elements != 2) {
+		zval_dtor(&normaliser_result);
+		throw V8JS_SYM("Module normaliser expected to return array of 2 strings");
+	}
+
+	zval *data;
+	ulong index = 0;
+
+	ZEND_HASH_FOREACH_VAL(ht, data) {
+		if (Z_TYPE_P(data) != IS_STRING) {
+			convert_to_string(data);
+		}
+
+		switch(index++) {
+		case 0: // normalised path
+			*normalised_path = estrndup(Z_STRVAL_P(data), Z_STRLEN_P(data));
+			break;
+
+		case 1: // normalised module id
+			*module_name = estrndup(Z_STRVAL_P(data), Z_STRLEN_P(data));
+			break;
+		}
+	}
+	ZEND_HASH_FOREACH_END();
+
+	zval_dtor(&normaliser_result);
+}
+
 V8JS_METHOD(require)
 {
 	v8::Isolate *isolate = info.GetIsolate();
@@ -227,92 +317,13 @@ V8JS_METHOD(require)
 		v8js_commonjs_normalise_identifier(c->modules_base.back(), module_id, normalised_path, module_name);
 	}
 	else {
-		// Call custom normaliser
-		int call_result;
-		zval params[2];
-		zval normaliser_result;
-
-		zend_try {
-			{
-				isolate->Exit();
-				v8::Unlocker unlocker(isolate);
-
-				ZVAL_STRING(&params[0], c->modules_base.back());
-				ZVAL_STRING(&params[1], module_id);
-
-				call_result = call_user_function_ex(EG(function_table), NULL, &c->module_normaliser,
-													&normaliser_result, 2, params, 0, NULL);
-			}
-
-			isolate->Enter();
-
-			if (call_result == FAILURE) {
-				info.GetReturnValue().Set(isolate->ThrowException(V8JS_SYM("Module normaliser callback failed")));
-			}
+		try {
+			v8js_call_custom_normaliser(c, module_id, &normalised_path, &module_name);
 		}
-		zend_catch {
-			v8js_terminate_execution(isolate);
-			V8JSG(fatal_error_abort) = 1;
-			call_result = FAILURE;
-		}
-		zend_end_try();
-
-		zval_dtor(&params[0]);
-		zval_dtor(&params[1]);
-
-		if(call_result == FAILURE) {
+		catch (v8::Local<v8::Value> error_message) {
+			info.GetReturnValue().Set(isolate->ThrowException(error_message));
 			return;
 		}
-
-		// Check if an exception was thrown
-		if (EG(exception)) {
-			if (c->flags & V8JS_FLAG_PROPAGATE_PHP_EXCEPTIONS) {
-				zval tmp_zv;
-				ZVAL_OBJ(&tmp_zv, EG(exception));
-				info.GetReturnValue().Set(isolate->ThrowException(zval_to_v8js(&tmp_zv, isolate)));
-				zend_clear_exception();
-			} else {
-				v8js_terminate_execution(isolate);
-			}
-			return;
-		}
-
-		if (Z_TYPE(normaliser_result) != IS_ARRAY) {
-			zval_dtor(&normaliser_result);
-			info.GetReturnValue().Set(isolate->ThrowException(V8JS_SYM("Module normaliser didn't return an array")));
-			return;
-		}
-
-		HashTable *ht = HASH_OF(&normaliser_result);
-		int num_elements = zend_hash_num_elements(ht);
-
-		if(num_elements != 2) {
-			zval_dtor(&normaliser_result);
-			info.GetReturnValue().Set(isolate->ThrowException(V8JS_SYM("Module normaliser expected to return array of 2 strings")));
-			return;
-		}
-
-		zval *data;
-		ulong index = 0;
-
-		ZEND_HASH_FOREACH_VAL(ht, data) {
-			if (Z_TYPE_P(data) != IS_STRING) {
-				convert_to_string(data);
-			}
-
-			switch(index++) {
-			case 0: // normalised path
-				normalised_path = estrndup(Z_STRVAL_P(data), Z_STRLEN_P(data));
-				break;
-
-			case 1: // normalised module id
-				module_name = estrndup(Z_STRVAL_P(data), Z_STRLEN_P(data));
-				break;
-			}
-		}
-		ZEND_HASH_FOREACH_END();
-
-		zval_dtor(&normaliser_result);
 	}
 
 	char *normalised_module_id = (char *)emalloc(strlen(normalised_path)+1+strlen(module_name)+1);
