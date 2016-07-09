@@ -199,6 +199,20 @@ V8JS_METHOD(var_dump) /* {{{ */
 
 	info.GetReturnValue().Set(V8JS_NULL);
 }
+
+void v8js_forward_exception_or_terminate(v8js_ctx* c) {
+	if (c->flags & V8JS_FLAG_PROPAGATE_PHP_EXCEPTIONS) {
+		zval tmp_zv;
+		ZVAL_OBJ(&tmp_zv, EG(exception));
+		v8::Local<v8::Value> exception = zval_to_v8js(&tmp_zv, c->isolate);
+		zend_clear_exception();
+		throw exception;
+	} else {
+		v8js_terminate_execution(c->isolate);
+		throw false;
+	}
+}
+
 /* }}} */
 
 static void v8js_call_custom_normaliser(v8js_ctx *c, const char *module_id,
@@ -241,18 +255,8 @@ static void v8js_call_custom_normaliser(v8js_ctx *c, const char *module_id,
 		throw V8JS_SYM("Module normaliser callback failed");
 	}
 
-	// Check if an exception was thrown
 	if (EG(exception)) {
-		if (c->flags & V8JS_FLAG_PROPAGATE_PHP_EXCEPTIONS) {
-			zval tmp_zv;
-			ZVAL_OBJ(&tmp_zv, EG(exception));
-			v8::Local<v8::Value> exception = zval_to_v8js(&tmp_zv, isolate);
-			zend_clear_exception();
-			throw exception;
-		} else {
-			v8js_terminate_execution(isolate);
-			throw false;
-		}
+		v8js_forward_exception_or_terminate(c);
 	}
 
 	if (Z_TYPE(normaliser_result) != IS_ARRAY) {
@@ -318,6 +322,39 @@ static void v8js_normalise_module_id(v8js_ctx *c, v8::Local<v8::Value> module_id
 	efree(module_name);
 }
 
+static void v8js_call_module_loader(v8js_ctx *c, const char *normalised_module_id, zval *module_code /* out */)
+{
+	v8::Isolate *isolate = c->isolate;
+	int call_result;
+	zval params[1];
+
+	{
+		isolate->Exit();
+		v8::Unlocker unlocker(isolate);
+
+		zend_try {
+			ZVAL_STRING(&params[0], normalised_module_id);
+			call_result = call_user_function_ex(EG(function_table), NULL, &c->module_loader, module_code, 1, params, 0, NULL);
+		}
+		zend_catch {
+			v8js_terminate_execution(isolate);
+			V8JSG(fatal_error_abort) = 1;
+		}
+		zend_end_try();
+	}
+
+	isolate->Enter();
+	zval_dtor(&params[0]);
+
+	if (V8JSG(fatal_error_abort) || call_result == FAILURE) {
+		throw static_cast<v8::Local<v8::Value>>(V8JS_SYM("Module loader callback failed"));
+	}
+
+	if (EG(exception)) {
+		v8js_forward_exception_or_terminate(c);
+	}
+}
+
 V8JS_METHOD(require)
 {
 	v8::Isolate *isolate = info.GetIsolate();
@@ -368,57 +405,17 @@ V8JS_METHOD(require)
 	}
 
 	// Callback to PHP to load the module code
-
 	zval module_code;
-	int call_result;
-	zval params[1];
-
-	{
-		isolate->Exit();
-		v8::Unlocker unlocker(isolate);
-
-		zend_try {
-			ZVAL_STRING(&params[0], normalised_module_id);
-			call_result = call_user_function_ex(EG(function_table), NULL, &c->module_loader, &module_code, 1, params, 0, NULL);
-		}
-		zend_catch {
-			v8js_terminate_execution(isolate);
-			V8JSG(fatal_error_abort) = 1;
-		}
-		zend_end_try();
+	try {
+		v8js_call_module_loader(c, normalised_module_id, &module_code);
 	}
-
-	isolate->Enter();
-
-	if (V8JSG(fatal_error_abort)) {
-		call_result = FAILURE;
-	}
-	else if (call_result == FAILURE) {
-		info.GetReturnValue().Set(isolate->ThrowException(V8JS_SYM("Module loader callback failed")));
-	}
-
-	zval_dtor(&params[0]);
-
-	if (call_result == FAILURE) {
-		efree(normalised_module_id);
-		efree(normalised_path);
-		return;
-	}
-
-	// Check if an exception was thrown
-	if (EG(exception)) {
+	catch (v8::Local<v8::Value> error_message) {
 		efree(normalised_module_id);
 		efree(normalised_path);
 
-		if (c->flags & V8JS_FLAG_PROPAGATE_PHP_EXCEPTIONS) {
-			zval tmp_zv;
-			ZVAL_OBJ(&tmp_zv, EG(exception));
-			info.GetReturnValue().Set(isolate->ThrowException(zval_to_v8js(&tmp_zv, isolate)));
-			zend_clear_exception();
-		} else {
-			v8js_terminate_execution(isolate);
+		if (!V8JSG(fatal_error_abort)) {
+			info.GetReturnValue().Set(isolate->ThrowException(error_message));
 		}
-
 		return;
 	}
 
