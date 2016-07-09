@@ -497,10 +497,10 @@ V8JS_METHOD(require)
 		return;
 	}
 
-	// Callback to PHP to load the module code
-	zval module_code;
+	// Callback to PHP to load the module
+	zval module;
 	try {
-		v8js_call_module_loader(c, normalised_module_id, &module_code);
+		v8js_call_module_loader(c, normalised_module_id, &module);
 	}
 	catch (v8::Local<v8::Value> error_message) {
 		efree(normalised_module_id);
@@ -512,23 +512,29 @@ V8JS_METHOD(require)
 		return;
 	}
 
-	c->modules_stack.push_back(normalised_module_id);
-	c->modules_base.push_back(normalised_path);
-
-	try {
-		v8::Local<v8::Object> newobj = v8js_call_module(isolate, V8JS_STR(normalised_module_id), &module_code);
+	if(Z_TYPE(module) == IS_OBJECT) {
+		v8::Local<v8::Object> newobj = zval_to_v8js(&module, isolate)->ToObject();
 		c->modules_loaded[normalised_module_id].Reset(isolate, newobj);
 		info.GetReturnValue().Set(newobj);
-	}
-	catch (v8::Local<v8::Value> exception) {
-		info.GetReturnValue().Set(exception);
-		efree(normalised_module_id);
+	} else {
+		c->modules_stack.push_back(normalised_module_id);
+		c->modules_base.push_back(normalised_path);
+
+		try {
+			v8::Local<v8::Object> newobj = v8js_call_module(isolate, V8JS_STR(normalised_module_id), &module);
+			c->modules_loaded[normalised_module_id].Reset(isolate, newobj);
+			info.GetReturnValue().Set(newobj);
+		}
+		catch (v8::Local<v8::Value> exception) {
+			info.GetReturnValue().Set(exception);
+			efree(normalised_module_id);
+		}
+
+		c->modules_stack.pop_back();
+		c->modules_base.pop_back();
 	}
 
-	c->modules_stack.pop_back();
-	c->modules_base.pop_back();
-
-	zval_ptr_dtor(&module_code);
+	zval_ptr_dtor(&module);
 	efree(normalised_path);
 }
 
