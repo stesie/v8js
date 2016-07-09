@@ -52,8 +52,12 @@ static void v8js_commonjs_split_terms(const char *identifier, std::vector<char *
     efree(term);
 }
 
-void v8js_commonjs_normalise_identifier(const char *base, const char *identifier, char *normalised_path, char *module_name)
+void v8js_commonjs_default_normaliser(const char *base, const char *identifier,
+									  char **normalised_path /* out */, char **module_name /* out */)
 {
+	*normalised_path = (char *)emalloc(PATH_MAX);
+	*module_name = (char *)emalloc(PATH_MAX);
+
     std::vector<char *> id_terms, terms;
     v8js_commonjs_split_terms(identifier, id_terms);
 
@@ -89,10 +93,10 @@ void v8js_commonjs_normalise_identifier(const char *base, const char *identifier
     }
 
     // Initialise the normalised path string
-    *normalised_path = 0;
-    *module_name = 0;
+    **normalised_path = 0;
+    **module_name = 0;
 
-    strcat(module_name, normalised_terms.back());
+    strcat(*module_name, normalised_terms.back());
 
     efree(normalised_terms.back());
     normalised_terms.pop_back();
@@ -100,11 +104,11 @@ void v8js_commonjs_normalise_identifier(const char *base, const char *identifier
     for (std::vector<char *>::iterator it = normalised_terms.begin(); it != normalised_terms.end(); it++) {
         char *term = *it;
 
-        if (strlen(normalised_path) > 0) {
-            strcat(normalised_path, "/");
+        if (strlen(*normalised_path) > 0) {
+            strcat(*normalised_path, "/");
         }
 
-        strcat(normalised_path, term);
+        strcat(*normalised_path, term);
         efree(term);
     }
 }

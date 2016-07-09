@@ -291,6 +291,33 @@ static void v8js_call_custom_normaliser(v8js_ctx *c, const char *module_id,
 	zval_dtor(&normaliser_result);
 }
 
+static void v8js_normalise_module_id(v8js_ctx *c, v8::Local<v8::Value> module_identifier,
+									 char **normalised_module_id /* out */, char **normalised_path /* out */)
+{
+	v8::String::Utf8Value module_identifier_utf8(module_identifier);
+	const char *module_id = ToCString(module_identifier_utf8);
+	char *module_name;
+
+	if (Z_TYPE(c->module_normaliser) == IS_NULL) {
+		// No custom normalisation routine registered, use internal one
+		v8js_commonjs_default_normaliser(c->modules_base.back(), module_id, normalised_path, &module_name);
+	}
+	else {
+		v8js_call_custom_normaliser(c, module_id, normalised_path, &module_name);
+	}
+
+	*normalised_module_id = (char *)emalloc(strlen(*normalised_path) + 1 + strlen(module_name) + 1);
+	**normalised_module_id = 0;
+
+	if (strlen(*normalised_path) > 0) {
+		strcat(*normalised_module_id, *normalised_path);
+		strcat(*normalised_module_id, "/");
+	}
+
+	strcat(*normalised_module_id, module_name);
+	efree(module_name);
+}
+
 V8JS_METHOD(require)
 {
 	v8::Isolate *isolate = info.GetIsolate();
@@ -305,37 +332,16 @@ V8JS_METHOD(require)
 		return;
 	}
 
-	v8::String::Utf8Value module_id_v8(info[0]);
-	const char *module_id = ToCString(module_id_v8);
-	char *normalised_path, *module_name;
+	char *normalised_module_id;
+	char *normalised_path;
 
-	if (Z_TYPE(c->module_normaliser) == IS_NULL) {
-		// No custom normalisation routine registered, use internal one
-		normalised_path = (char *)emalloc(PATH_MAX);
-		module_name = (char *)emalloc(PATH_MAX);
-
-		v8js_commonjs_normalise_identifier(c->modules_base.back(), module_id, normalised_path, module_name);
+	try {
+		v8js_normalise_module_id(c, info[0], &normalised_module_id, &normalised_path);
 	}
-	else {
-		try {
-			v8js_call_custom_normaliser(c, module_id, &normalised_path, &module_name);
-		}
-		catch (v8::Local<v8::Value> error_message) {
-			info.GetReturnValue().Set(isolate->ThrowException(error_message));
-			return;
-		}
+	catch (v8::Local<v8::Value> error_message) {
+		info.GetReturnValue().Set(isolate->ThrowException(error_message));
+		return;
 	}
-
-	char *normalised_module_id = (char *)emalloc(strlen(normalised_path)+1+strlen(module_name)+1);
-	*normalised_module_id = 0;
-
-	if (strlen(normalised_path) > 0) {
-		strcat(normalised_module_id, normalised_path);
-		strcat(normalised_module_id, "/");
-	}
-
-	strcat(normalised_module_id, module_name);
-	efree(module_name);
 
 	// Check for module cyclic dependencies
 	for (std::vector<char *>::iterator it = c->modules_stack.begin(); it != c->modules_stack.end(); ++it)
